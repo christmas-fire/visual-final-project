@@ -1,8 +1,6 @@
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
-using Microsoft.EntityFrameworkCore;
-using FinalProject.Data;
-using FinalProject.Models;
+using FinalProject.Services;
 
 namespace FinalProject.Controllers;
 
@@ -11,88 +9,55 @@ namespace FinalProject.Controllers;
 [Route("api/[controller]")]
 public class UsersController : ControllerBase
 {
-    private readonly ApplicationDbContext _context;
+    private readonly IUserService _userService;
 
-    public UsersController(ApplicationDbContext context)
+    public UsersController(IUserService userService)
     {
-        _context = context;
+        _userService = userService;
     }
 
     [HttpGet]
     public async Task<IActionResult> GetUsers()
     {
-        var users = await _context.Users
-            .Select(u => new
-            {
-                u.Id,
-                u.Username,
-                u.Email,
-                u.Role,
-                u.IsBlocked
-            })
-            .ToListAsync();
-
+        var users = await _userService.GetUsersAsync();
         return Ok(users);
     }
 
     [HttpPost]
-    public async Task<IActionResult> CreateUser([FromBody] CreateUserRequest request)
+    public async Task<IActionResult> CreateUser([FromBody] CreateUserDto request)
     {
-        if (await _context.Users.AnyAsync(u => u.Email == request.Email))
-            return BadRequest("Email already registered");
+        var (success, user, errorMessage) = await _userService.CreateUserAsync(request);
 
-        if (await _context.Users.AnyAsync(u => u.Username == request.Username))
-            return BadRequest("Username already taken");
-
-        if (request.Role != "Author" && request.Role != "Reviewer")
-            return BadRequest("Invalid role");
-
-        var user = new User
+        if (!success)
         {
-            Username = request.Username,
-            Email = request.Email,
-            PasswordHash = BCrypt.Net.BCrypt.HashPassword(request.Password),
-            Role = request.Role,
-            IsBlocked = false
-        };
-
-        _context.Users.Add(user);
-        await _context.SaveChangesAsync();
-
-        return Ok(new { message = "User created successfully", userId = user.Id });
+            return BadRequest(errorMessage ?? "Failed to create user.");
+        }
+        return Ok(new { message = "User created successfully", userId = user?.Id, user });
     }
 
     [HttpPut("{id}/block")]
     public async Task<IActionResult> ToggleBlockUser(int id)
     {
-        var user = await _context.Users.FindAsync(id);
-        if (user == null)
-            return NotFound();
-
-        user.IsBlocked = !user.IsBlocked;
-        await _context.SaveChangesAsync();
-
-        return Ok(new { message = $"User {(user.IsBlocked ? "blocked" : "unblocked")} successfully" });
+        var (success, message, errorMessage) = await _userService.ToggleBlockUserAsync(id);
+        if (!success)
+        {
+            if (errorMessage == "User not found")
+                return NotFound(errorMessage);
+            return BadRequest(errorMessage ?? "Operation failed.");
+        }
+        return Ok(new { message });
     }
 
     [HttpDelete("{id}")]
     public async Task<IActionResult> DeleteUser(int id)
     {
-        var user = await _context.Users.FindAsync(id);
-        if (user == null)
-            return NotFound();
-
-        _context.Users.Remove(user);
-        await _context.SaveChangesAsync();
-
+        var (success, errorMessage) = await _userService.DeleteUserAsync(id);
+        if (!success)
+        {
+            if (errorMessage == "User not found")
+                return NotFound(errorMessage);
+            return BadRequest(errorMessage ?? "Failed to delete user.");
+        }
         return Ok(new { message = "User deleted successfully" });
     }
 }
-
-public class CreateUserRequest
-{
-    public string Username { get; set; } = null!;
-    public string Email { get; set; } = null!;
-    public string Password { get; set; } = null!;
-    public string Role { get; set; } = null!;
-} 
